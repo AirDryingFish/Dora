@@ -19,9 +19,12 @@ import torch.nn as nn
 from einops import repeat, rearrange
 
 import craftsman
-from craftsman.models.transformers.perceiver_1d import Perceiver
+# from craftsman.models.transformers.perceiver_1d import Perceiver
 from craftsman.models.transformers.attention import ResidualCrossAttentionBlock
-from craftsman.utils.checkpoint import checkpoint
+
+from .attention_blocks import FourierEmbedder, Transformer, CrossAttentionDecoder
+
+# from craftsman.utils.checkpoint import checkpoint
 from craftsman.utils.base import BaseModule
 from craftsman.utils.typing import *
 
@@ -42,7 +45,11 @@ class PerceiverCrossAttentionEncoder(nn.Module):
                  qkv_bias: bool = True,
                  use_ln_post: bool = False,
                  use_flash: bool = False,
-                 use_checkpoint: bool = False):
+                 use_checkpoint: bool = False,
+                 qk_norm: bool = True,
+                 drop_path_rate: float = 0.0,
+                 stage: int = 0
+    ):
 
         super().__init__()
 
@@ -79,16 +86,16 @@ class PerceiverCrossAttentionEncoder(nn.Module):
             use_checkpoint=False
         )
 
-        self.self_attn = Perceiver(
+        self.self_attn = Transformer(
             n_ctx=num_latents,
             width=width,
             layers=layers,
             heads=heads,
-            init_scale=init_scale,
             qkv_bias=qkv_bias,
-            use_flash=use_flash,
-            use_checkpoint=use_checkpoint
+            qk_norm=qk_norm,
+            drop_path_rate=drop_path_rate
         )
+        self.stage = stage
 
         if use_ln_post:
             self.ln_post = nn.LayerNorm(width)
@@ -116,14 +123,24 @@ class PerceiverCrossAttentionEncoder(nn.Module):
 
         if self.use_downsample:
             ###### fps
-            tokens = np.array([128.0,256.0,384.0,512.0,640.0,1024.0,2048.0])
+            tokens = np.array([128.0,256.0,384.0,512.0,640.0,1024.0,1536.0])
             
             coarse_ratios = tokens/ N_coarse
             sharp_ratios = tokens/ N_sharp
             if split =='val':
                 probabilities = np.array([0,0,0,0,0,1,0]) 
             elif split =='train':
-                probabilities = np.array([ 0.1,0.1,0.1,0.1,0.1,0.3,0.2])
+                if self.stage == 0:
+                    probabilities = np.array([ 0.1,0.1,0.1,0.1,0.1,0.3,0.2])
+                # stage1
+                if self.stage == 1:
+                    probabilities = np.array([ 0.3,0.35,0.35,0.0,0.0,0.0,0.0])
+                if self.stage == 2:
+                    probabilities = np.array([ 0.0,0.0,0.0,0.5,0.5,0.0,0.0])
+                if self.stage == 3:
+                    probabilities = np.array([ 0.0,0.0,0.0,0.0,0.0,1.0,0.0])
+                if self.stage == 4:
+                    probabilities = np.array([ 0.0,0.0,0.0,0.0,0.0,0.0,1.0])
             ratio_coarse = np.random.choice(coarse_ratios, size=1, p=probabilities)[0]
             index = np.where(coarse_ratios == ratio_coarse)[0]
             ratio_sharp = sharp_ratios[index].item()
@@ -173,49 +190,49 @@ class PerceiverCrossAttentionEncoder(nn.Module):
         return self._forward(coarse_pc, sharp_pc, coarse_feats, sharp_feats,split)
 
 
-class PerceiverCrossAttentionDecoder(nn.Module):
+# class PerceiverCrossAttentionDecoder(nn.Module):
 
-    def __init__(self,
-                 num_latents: int,
-                 out_dim: int,
-                 embedder: FourierEmbedder,
-                 width: int,
-                 heads: int,
-                 init_scale: float = 0.25,
-                 qkv_bias: bool = True,
-                 use_flash: bool = False,
-                 use_checkpoint: bool = False):
+#     def __init__(self,
+#                  num_latents: int,
+#                  out_dim: int,
+#                  embedder: FourierEmbedder,
+#                  width: int,
+#                  heads: int,
+#                  init_scale: float = 0.25,
+#                  qkv_bias: bool = True,
+#                  use_flash: bool = False,
+#                  use_checkpoint: bool = False):
 
-        super().__init__()
+#         super().__init__()
 
-        self.use_checkpoint = use_checkpoint
-        self.embedder = embedder
+#         self.use_checkpoint = use_checkpoint
+#         self.embedder = embedder
 
-        self.query_proj = nn.Linear(self.embedder.out_dim, width)
+#         self.query_proj = nn.Linear(self.embedder.out_dim, width)
 
-        self.cross_attn_decoder = ResidualCrossAttentionBlock(
-            n_data=num_latents,
-            width=width,
-            heads=heads,
-            init_scale=init_scale,
-            qkv_bias=qkv_bias,
-            use_flash=use_flash,
-            use_checkpoint=use_checkpoint
-        )
+#         self.cross_attn_decoder = ResidualCrossAttentionBlock(
+#             n_data=num_latents,
+#             width=width,
+#             heads=heads,
+#             init_scale=init_scale,
+#             qkv_bias=qkv_bias,
+#             use_flash=use_flash,
+#             use_checkpoint=use_checkpoint
+#         )
 
-        self.ln_post = nn.LayerNorm(width)
-        self.output_proj = nn.Linear(width, out_dim)
+#         self.ln_post = nn.LayerNorm(width)
+#         self.output_proj = nn.Linear(width, out_dim)
 
-    def _forward(self, queries: torch.FloatTensor, latents: torch.FloatTensor):
-        queries = self.query_proj(self.embedder(queries))
-        x = self.cross_attn_decoder(queries, latents)
-        x = self.ln_post(x)
-        x = self.output_proj(x)
-        return x
+#     def _forward(self, queries: torch.FloatTensor, latents: torch.FloatTensor):
+#         queries = self.query_proj(self.embedder(queries))
+#         x = self.cross_attn_decoder(queries, latents)
+#         x = self.ln_post(x)
+#         x = self.output_proj(x)
+#         return x
 
-    def forward(self, queries: torch.FloatTensor, latents: torch.FloatTensor):
-        logits = checkpoint(self._forward, (queries, latents), self.parameters(), self.use_checkpoint)
-        return logits
+#     def forward(self, queries: torch.FloatTensor, latents: torch.FloatTensor):
+#         logits = checkpoint(self._forward, (queries, latents), self.parameters(), self.use_checkpoint)
+#         return logits
 
 
 @craftsman.register("michelangelo-autoencoder")
@@ -227,6 +244,7 @@ class MichelangeloAutoencoder(AutoEncoder):
     @dataclass
     class Config(BaseModule.Config):
         pretrained_model_name_or_path: str = ""
+        hunyuan_decoder_model: str = ""
         use_downsample: bool = False
         num_latents: int = 256
         point_feats: int = 0
@@ -236,15 +254,26 @@ class MichelangeloAutoencoder(AutoEncoder):
         embed_type: str = "fourier"
         num_freqs: int = 8
         include_pi: bool = True
-        width: int = 768
-        heads: int = 12
+        width: int = 1024
+        heads: int = 16
         num_encoder_layers: int = 8
         num_decoder_layers: int = 16
         init_scale: float = 0.25
         qkv_bias: bool = True
-        use_ln_post: bool = False
+        use_ln_post: bool = True
         use_flash: bool = False
         use_checkpoint: bool = True
+
+        qk_norm: bool = True
+        drop_path_rate: float = 0.0
+        geo_decoder_downsample_ratio: int = 1
+        geo_decoder_mlp_expand_ratio: int = 4
+        geo_decoder_ln_post: bool = True
+        label_type: str = "binary"
+
+        deterministic: bool = False
+        stage: int = 0
+
 
     cfg: Config
 
@@ -266,7 +295,10 @@ class MichelangeloAutoencoder(AutoEncoder):
             qkv_bias=self.cfg.qkv_bias,
             use_ln_post=self.cfg.use_ln_post,
             use_flash=self.cfg.use_flash,
-            use_checkpoint=self.cfg.use_checkpoint
+            use_checkpoint=self.cfg.use_checkpoint,
+            qk_norm=self.cfg.qk_norm,
+            drop_path_rate=self.cfg.drop_path_rate,
+            stage=self.cfg.stage
         )
 
         if self.cfg.embed_dim > 0:
@@ -277,28 +309,52 @@ class MichelangeloAutoencoder(AutoEncoder):
         else:
             self.latent_shape = (self.cfg.num_latents, self.cfg.width)
 
-        self.transformer = Perceiver(
+        # self.transformer = Perceiver(
+        #     n_ctx=self.cfg.num_latents,
+        #     width=self.cfg.width,
+        #     layers=self.cfg.num_decoder_layers,
+        #     heads=self.cfg.heads,
+        #     init_scale=self.cfg.init_scale,
+        #     qkv_bias=self.cfg.qkv_bias,
+        #     use_flash=self.cfg.use_flash,
+        #     use_checkpoint=self.cfg.use_checkpoint
+        # )
+
+        # # decoder
+        # self.decoder = PerceiverCrossAttentionDecoder(
+        #     embedder=self.embedder,
+        #     out_dim=self.cfg.out_dim,
+        #     num_latents=self.cfg.num_latents,
+        #     width=self.cfg.width,
+        #     heads=self.cfg.heads,
+        #     init_scale=self.cfg.init_scale,
+        #     qkv_bias=self.cfg.qkv_bias,
+        #     use_flash=self.cfg.use_flash,
+        #     use_checkpoint=self.cfg.use_checkpoint
+        # )
+
+        self.transformer = Transformer(
             n_ctx=self.cfg.num_latents,
             width=self.cfg.width,
             layers=self.cfg.num_decoder_layers,
             heads=self.cfg.heads,
-            init_scale=self.cfg.init_scale,
             qkv_bias=self.cfg.qkv_bias,
-            use_flash=self.cfg.use_flash,
-            use_checkpoint=self.cfg.use_checkpoint
+            qk_norm=self.cfg.qk_norm,
+            drop_path_rate=self.cfg.drop_path_rate
         )
 
-        # decoder
-        self.decoder = PerceiverCrossAttentionDecoder(
-            embedder=self.embedder,
-            out_dim=self.cfg.out_dim,
+        self.geo_decoder = CrossAttentionDecoder(
+            fourier_embedder=self.embedder,
+            out_channels=1,
             num_latents=self.cfg.num_latents,
-            width=self.cfg.width,
-            heads=self.cfg.heads,
-            init_scale=self.cfg.init_scale,
+            mlp_expand_ratio=self.cfg.geo_decoder_mlp_expand_ratio,
+            downsample_ratio=self.cfg.geo_decoder_downsample_ratio,
+            enable_ln_post=self.cfg.geo_decoder_ln_post,
+            width=self.cfg.width // self.cfg.geo_decoder_downsample_ratio,
+            heads=self.cfg.heads // self.cfg.geo_decoder_downsample_ratio,
             qkv_bias=self.cfg.qkv_bias,
-            use_flash=self.cfg.use_flash,
-            use_checkpoint=self.cfg.use_checkpoint
+            qk_norm=self.cfg.qk_norm,
+            label_type=self.cfg.label_type,
         )
 
 
@@ -319,8 +375,54 @@ class MichelangeloAutoencoder(AutoEncoder):
                 pretrained_ckpt = _pretrained_ckpt
                 
             self.load_state_dict(pretrained_ckpt, strict=True)
+
+        elif self.cfg.hunyuan_decoder_model != "":
+            print(f"Loading pretrained Hunyuan decoder model from {self.cfg.hunyuan_decoder_model}")
+            decoder_ckpt = torch.load(self.cfg.hunyuan_decoder_model, map_location="cpu")
             
-    
+            # 处理state_dict结构
+            if 'state_dict' in decoder_ckpt:
+                _decoder_ckpt = {}
+                for k, v in decoder_ckpt['state_dict'].items():
+                    if k.startswith('transformer.') or k.startswith('geo_decoder.') or k.startswith('post_kl.'):
+                        _decoder_ckpt[k] = v  # 保持原始key名称
+                decoder_ckpt = _decoder_ckpt
+            else:
+                _decoder_ckpt = {}
+                for k, v in decoder_ckpt.items():
+                    if k.startswith('transformer.') or k.startswith('geo_decoder.') or k.startswith('post_kl.'):
+                        _decoder_ckpt[k] = v  # 保持原始key名称
+                decoder_ckpt = _decoder_ckpt
+            
+            # 加载到当前模型
+            model_dict = self.state_dict()
+            
+            # 1. 筛选出可加载的参数
+            load_dict = {k: v for k, v in decoder_ckpt.items() 
+                        if k in model_dict and v.shape == model_dict[k].shape}
+            
+            # 2. 打印加载信息
+            print(f"成功加载 {len(load_dict)}/{len(decoder_ckpt)} 个参数")
+            missing_keys = [k for k in decoder_ckpt if k not in model_dict]
+            shape_mismatch = [k for k in decoder_ckpt 
+                            if k in model_dict and decoder_ckpt[k].shape != model_dict[k].shape]
+            
+            if missing_keys:
+                print(f"⚠️ 缺失参数: {missing_keys}")
+            if shape_mismatch:
+                print(f"⚠️ 形状不匹配: {shape_mismatch}")
+            
+            # 3. 更新模型参数
+            model_dict.update(load_dict)
+            self.load_state_dict(model_dict, strict=False)
+
+        for name, param in self.named_parameters():
+            if name.startswith('transformer.') \
+               or name.startswith('geo_decoder.') \
+               or name.startswith('post_kl.'):
+                param.requires_grad = False
+            
+        # print("End init")
     def encode(self,
                coarse_surface: torch.FloatTensor,
                sharp_surface: torch.FloatTensor,
@@ -336,11 +438,11 @@ class MichelangeloAutoencoder(AutoEncoder):
             kl_embed (torch.FloatTensor): [B, num_latents, embed_dim]
             posterior (DiagonalGaussianDistribution or None):
         """
-        
+        # print("encoding")
         coarse_pc, coarse_feats = coarse_surface[..., :3], coarse_surface[..., 3:] 
         sharp_pc, sharp_feats = sharp_surface[..., :3], sharp_surface[..., 3:] 
         shape_latents = self.encoder(coarse_pc, sharp_pc, coarse_feats ,sharp_feats,split=self.split)
-        kl_embed, posterior = self.encode_kl_embed(shape_latents, sample_posterior)
+        kl_embed, posterior = self.encode_kl_embed(shape_latents, sample_posterior, deterministic=self.cfg.deterministic)
 
 
         return shape_latents, kl_embed, posterior
@@ -355,6 +457,7 @@ class MichelangeloAutoencoder(AutoEncoder):
         Returns:
             latents (torch.FloatTensor): [B, embed_dim]
         """
+        # print("decoding")
         latents = self.post_kl(latents) # [B, num_latents, embed_dim] -> [B, num_latents, width]
 
         return self.transformer(latents)
@@ -371,6 +474,7 @@ class MichelangeloAutoencoder(AutoEncoder):
         Returns:
             logits (torch.FloatTensor): [B, N], occupancy logits
         """
-        logits = self.decoder(queries, latents).squeeze(-1)
+        # print("querying")
+        logits = self.geo_decoder(queries=queries, latents=latents).squeeze(-1)
 
         return logits

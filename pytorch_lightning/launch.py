@@ -40,6 +40,7 @@ import torch.nn as nn
 
 from craftsman.models.autoencoders.utils import  get_embedder
 
+
 class ColoredFilter(logging.Filter):
     """
     A logging filter to add color to certain log levels.
@@ -205,9 +206,9 @@ def main(args, extras) -> None:
                 dirpath=os.path.join(cfg.trial_dir, "ckpts"), **cfg.checkpoint
             ),
             LearningRateMonitor(logging_interval="step"),
-            CodeSnapshotCallback(
-                os.path.join(cfg.trial_dir, "code"), use_version=False
-            ),
+            # CodeSnapshotCallback(
+            #     os.path.join(cfg.trial_dir, "code"), use_version=False
+            # ),
             ConfigSnapshotCallback(
                 args.config,
                 cfg,
@@ -243,7 +244,7 @@ def main(args, extras) -> None:
                 ["python " + " ".join(sys.argv), str(args)],
             )
         )()
-
+    # print("Trainer 1")
     trainer = Trainer(
         callbacks=callbacks,
         logger=loggers,
@@ -253,15 +254,18 @@ def main(args, extras) -> None:
         # profiler="advanced",
         **cfg.trainer,
     )
-
+    # print("Trainer 2")
     def set_system_status(system: BaseSystem, ckpt_path: Optional[str]):
         if ckpt_path is None:
             return
         ckpt = torch.load(ckpt_path, map_location="cpu")
         system.set_resume_status(ckpt["epoch"], ckpt["global_step"])
     if args.train:
+        # print("Trainer fitting 1")
         trainer.fit(system, datamodule=dm, ckpt_path=cfg.resume)
+        # print("Trainer fitting 2")
         trainer.test(system, datamodule=dm)
+        # print("Trainer testing 2")
         if args.gradio:
             # also export assets if in gradio mode
             trainer.predict(system, datamodule=dm)
@@ -279,6 +283,8 @@ def main(args, extras) -> None:
 
 
 if __name__ == "__main__":
+    import torch.multiprocessing as mp
+    mp.set_start_method("fork", force=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="path to config file")
     parser.add_argument(

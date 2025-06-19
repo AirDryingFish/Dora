@@ -212,6 +212,7 @@ class AutoEncoder(BaseModule):
         num_latents: int = 256
         embed_dim: int = 64
         width: int = 768
+
         
     cfg: Config
 
@@ -224,11 +225,11 @@ class AutoEncoder(BaseModule):
     def decode(self, z: torch.FloatTensor) -> torch.FloatTensor:
         raise NotImplementedError
 
-    def encode_kl_embed(self, latents: torch.FloatTensor, sample_posterior: bool = True):
+    def encode_kl_embed(self, latents: torch.FloatTensor, sample_posterior: bool = True, deterministic: bool = False):
         posterior = None
         if self.cfg.embed_dim > 0: # 64
             moments = self.pre_kl(latents) # 103，256，768 -》 103，256，128
-            posterior = DiagonalGaussianDistribution(moments, feat_dim=-1)
+            posterior = DiagonalGaussianDistribution(moments, feat_dim=-1, deterministic=deterministic)
             if sample_posterior:
                 kl_embed = posterior.sample() # 1，768，64
             else:
@@ -295,7 +296,9 @@ class AutoEncoder(BaseModule):
         grid_logits = torch.cat(batch_logits, dim=1).view((batch_size, grid_size[0], grid_size[1], grid_size[2])).float()
 
         if save_slice_dir !='':
-            slice_grid = grid_logits[0,(grid_size[0]-1)//2] # -1 ~1 
+            slice_grid = grid_logits[0,(grid_size[0]-1)//2] # -1 ~1
+            if isinstance(slice_grid, torch.Tensor):
+                slice_grid = slice_grid.detach().cpu().numpy()
             color_values = np.where(slice_grid > 0, 1, 0)
             # color_values = (slice_grid+1)/2
             y_coords = np.arange(0, grid_size[0]-1, 1)

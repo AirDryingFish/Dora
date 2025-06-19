@@ -47,7 +47,9 @@ class ShapeAutoEncoderSystem(BaseSystem):
         self.shape_model = craftsman.find(self.cfg.shape_model_type)(self.cfg.shape_model)
 
     def forward(self, batch: Dict[str, Any],split: str) -> Dict[str, Any]:
-        num = batch["number_sharp"]
+        # print(batch["number_sharp"])
+        # num = batch["number_sharp"]
+        num = int(batch["number_sharp"][0].item())
         rand_points = batch["rand_points"] 
         if "sdf" in batch:
                 target = batch["sdf"]
@@ -133,7 +135,8 @@ class ShapeAutoEncoderSystem(BaseSystem):
         device = batch['coarse_surface'].device
         out = self(batch,'val')
         try:
-            save_slice_dir =  self.get_save_path(f"it{self.true_global_step}/{os.path.basename(batch['uid'][0])}.replace(".npz","")") # turn on
+            # save_slice_dir =  self.get_save_path(f"it{self.true_global_step}/{os.path.basename(batch['uid'][0])}.replace(".npz","")") # turn on
+            save_slice_dir = self.get_save_path(f"it{self.true_global_step}/{os.path.basename(batch['uid'][0])}".replace('.npz', ''))
             # save_slice_dir = ''  # turn off
             mesh_v_f, has_surface = self.shape_model.extract_geometry_by_diffdmc(out["latents"],octree_depth=9, save_slice_dir=save_slice_dir)
             file_path = f"it{self.true_global_step}/{os.path.basename(batch['uid'][0])}".replace(".npz",".obj")
@@ -224,7 +227,9 @@ class ShapeAutoEncoderSystem(BaseSystem):
         device = batch['coarse_surface'].device
         out = self(batch,'val')
         try:
-            save_slice_dir =  self.get_save_path(f"it{self.true_global_step}/{os.path.basename(batch['uid'][0])}.replace(".npz","")") # turn on
+            # save_slice_dir =  self.get_save_path(f"it{self.true_global_step}/{os.path.basename(batch['uid'][0])}.replace(".npz","")") # turn on
+            save_slice_dir = self.get_save_path(f"it{self.true_global_step}/{os.path.basename(batch['uid'][0])}".replace('.npz', ''))
+
             # save_slice_dir = ''  # turn off
             mesh_v_f, has_surface = self.shape_model.extract_geometry_by_diffdmc(out["latents"],octree_depth=9, save_slice_dir=save_slice_dir)
             file_path = f"it{self.true_global_step}/{os.path.basename(batch['uid'][0])}".replace(".npz",".obj")
